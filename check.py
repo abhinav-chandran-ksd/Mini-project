@@ -3,11 +3,15 @@ import face_recognition
 import pyodbc
 import json
 import numpy as np
+import time
 
 # --- CONFIGURATION ---
 SERVER_NAME = 'localhost'
 DB_NAME = 'attendance_ai'
 TOLERANCE = 0.6 
+SNAPSHOT_INTERVAL = 5    # Seconds between photos
+TOTAL_SNAPSHOTS = 6      # Total photos to take
+PASSING_THRESHOLD = 3    # Min photos to be considered "Present"
 
 # --- DATABASE CONNECTION ---
 def get_db_connection():
@@ -18,38 +22,40 @@ def get_db_connection():
         'Trusted_Connection=yes;'
     )
 
-# --- LOGGING FUNCTION (No Time, Just Period) ---
-def log_to_db(uid, name, subject, period, date_str):
+def log_to_db(uid, name, subject, period, date_str, status, notes=""):
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # We removed 'log_time' from this query
+        # Check if already logged to avoid duplicates
+        cursor.execute("SELECT log_id FROM attendance_log WHERE student_uid = ? AND subject_name = ? AND log_date = ?", 
+                       (str(uid), subject, date_str))
+        if cursor.fetchone():
+            # (Optional) Update existing record if needed, or just skip
+            # For now, we skip to avoid double entries
+            return
+
+        clean_uid = ''.join(filter(str.isdigit, str(uid))) 
+        final_status = f"{status} ({notes})" if notes else status
+
         sql = """
             INSERT INTO attendance_log 
             (student_uid, student_name, subject_name, period_number, log_date, status)
             VALUES (?, ?, ?, ?, ?, ?)
         """
-        values = (uid, name, subject, period, date_str, 'Present')
+        values = (clean_uid, name, subject, period, date_str, final_status)
         
         cursor.execute(sql, values)
         conn.commit()
         conn.close()
-        print(f" [DB] SUCCESS: Attendance saved for {name} (Period {period}).")
+        print(f" [DB] SAVED: {name} -> {final_status}")
         
     except Exception as e:
-        print(f" [DB] ERROR: Could not save log. {e}")
+        print(f" [DB] ERROR: {e}")
 
-# --- MAIN SYSTEM ---
-def run_attendance_system():
-    # 1. GET SESSION DETAILS
-    print("--- ATTENDANCE SESSION SETUP ---")
-    subject = input("Enter Subject (e.g., Math): ")
-    period  = input("Enter Period Number (e.g., 1): ")
-    date_input = input("Enter Date (YYYY-MM-DD): ")
-    
-    # 2. LOAD ENCODINGS FROM DB
-    print("\n--- LOADING DATABASE ---")
+def get_all_students():
+    """ Load all students and return lists """
+    print("\n--- LOADING CLASS DATABASE ---")
     known_encodings = []
     known_names = []
     known_uids = []
@@ -67,94 +73,119 @@ def run_attendance_system():
             known_encodings.append(np.array(json.loads(row[2])))
             
         print(f"Loaded {len(known_names)} students.")
-
+        return known_uids, known_names, known_encodings
     except Exception as e:
-        print(f"Error loading DB: {e}")
-        return
+        print(f"Database Error: {e}")
+        return [], [], []
 
-    # 3. CAPTURE IMAGE
-    cam = cv2.VideoCapture(0)
-    print("\n--- CAMERA ACTIVE: PRESS 'SPACE' TO MARK ATTENDANCE ---")
+def run_class_session():
+    # 1. SETUP
+    print("--- AUTOMATED CLASS SESSION ---")
+    subject = input("Enter Subject: ")
+    period  = input("Enter Period: ")
+    date_input = input("Enter Date (YYYY-MM-DD): ")
     
-    original_frame = None
+    # 2. LOAD ALL STUDENTS
+    all_uids, all_names, all_encodings = get_all_students()
+    
+    # 3. INITIALIZE TRACKING DICTIONARY
+    # Structure: { 'U101': [False, False, ...], 'U102': [False, False, ...] }
+    attendance_sheet = {uid: [False]*TOTAL_SNAPSHOTS for uid in all_uids}
+    
+    # Map UID to Name for easy lookup later
+    uid_to_name = {uid: name for uid, name in zip(all_uids, all_names)}
 
-    while True:
-        ret, frame = cam.read()
-        if not ret: break
+    # 4. START SESSION LOOP
+    cam = cv2.VideoCapture(0)
+    print(f"\nSTARTING SESSION: Taking {TOTAL_SNAPSHOTS} photos (1 every {SNAPSHOT_INTERVAL}s)...")
+    
+    for i in range(TOTAL_SNAPSHOTS):
+        start_time = time.time()
         
-        # Display instructions on screen
-        cv2.putText(frame, f"Subject: {subject} | Period: {period}", (20, 40), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
-        
-        cv2.imshow("Attendance Scanner", frame)
-        
-        k = cv2.waitKey(1)
-        if k % 256 == 32: # SPACE pressed
-            original_frame = frame
-            break
-        elif k % 256 == 27: # ESC pressed
-            cam.release()
-            cv2.destroyAllWindows()
-            return
+        # Countdown Loop for visual feedback
+        while True:
+            ret, frame = cam.read()
+            if not ret: break
+            
+            time_left = int((start_time + SNAPSHOT_INTERVAL) - time.time())
+            
+            if time_left <= 0:
+                break # Time to snap!
 
+            # UI
+            cv2.rectangle(frame, (0, 0), (640, 60), (50, 50, 50), -1)
+            cv2.putText(frame, f"Photo {i+1}/{TOTAL_SNAPSHOTS}", (20, 40), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+            cv2.putText(frame, f"Snap in: {time_left}s", (350, 40), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+            cv2.imshow("Class Scanner", frame)
+            cv2.waitKey(1)
+
+        # --- SNAPSHOT TAKEN ---
+        print(f"Processing Snapshot {i+1}...")
+        
+        # 1. Detect all faces in frame
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        face_locations = face_recognition.face_locations(rgb_frame)
+        face_encodings = face_recognition.face_encodings(rgb_frame, face_locations)
+
+        # 2. Identify who they are
+        found_in_this_frame = [] # Keep track of who we saw in THIS specific photo
+        
+        for face_encoding in face_encodings:
+            matches = face_recognition.compare_faces(all_encodings, face_encoding, tolerance=TOLERANCE)
+            face_distances = face_recognition.face_distance(all_encodings, face_encoding)
+            
+            best_match_index = np.argmin(face_distances)
+            
+            if matches[best_match_index]:
+                found_uid = all_uids[best_match_index]
+                found_in_this_frame.append(found_uid)
+
+        # 3. Update the Attendance Sheet
+        for uid in all_uids:
+            if uid in found_in_this_frame:
+                attendance_sheet[uid][i] = True
+                print(f"  -> Found: {uid_to_name[uid]}")
+    
     cam.release()
     cv2.destroyAllWindows()
 
-    # 4. PROCESSING (Gray -> Detect -> Encode)
-    print("Processing image...")
-    gray_image = cv2.cvtColor(original_frame, cv2.COLOR_BGR2GRAY)
-    face_locations = face_recognition.face_locations(gray_image)
+    # 5. CALCULATE FINAL RESULTS FOR EVERYONE
+    print("\n" + "="*40)
+    print(" FINAL CLASS REPORT")
+    print("="*40)
 
-    if not face_locations:
-        print("❌ No face detected.")
-        return
-
-    rgb_image = cv2.cvtColor(original_frame, cv2.COLOR_BGR2RGB)
-    unknown_encodings = face_recognition.face_encodings(rgb_image, face_locations)
-    
-    if not unknown_encodings:
-        print("❌ Could not encode face.")
-        return
-
-    target_encoding = unknown_encodings[0]
-
-    # 5. COMPARE
-    distances = face_recognition.face_distance(known_encodings, target_encoding)
-    best_match_index = np.argmin(distances)
-    best_distance = distances[best_match_index]
-
-    if best_distance < TOLERANCE:
-        # --- MATCH FOUND ---
-        matched_uid = known_uids[best_match_index]
-        matched_name = known_names[best_match_index]
-
-        print("\n" + "="*40)
-        print(f" ✅ MATCH CONFIRMED")
-        print(f" Student: {matched_name}")
-        print(f" UID:     {matched_uid}")
-        print("="*40)
-
-        # --- LOG TO DB (Without Time) ---
-        log_to_db(matched_uid, matched_name, subject, period, date_input)
-
-        # Draw Green Box
-        top, right, bottom, left = face_locations[0]
-        cv2.rectangle(original_frame, (left, top), (right, bottom), (0, 255, 0), 2)
-        cv2.putText(original_frame, f"{matched_name} - PRESENT", (left, bottom + 30), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+    for uid in all_uids:
+        record = attendance_sheet[uid] # e.g. [True, True, True, False...]
+        present_count = sum(record)
+        name = uid_to_name[uid]
         
-    else:
-        # --- NO MATCH ---
-        print(f"\n❌ UNKNOWN STUDENT")
-        top, right, bottom, left = face_locations[0]
-        cv2.rectangle(original_frame, (left, top), (right, bottom), (0, 0, 255), 2)
-        cv2.putText(original_frame, "UNKNOWN", (left, bottom + 30), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+        status = "ABSENT"
+        notes = ""
 
-    # Show Final Result
-    cv2.imshow("Final Result", original_frame)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
+        # LOGIC ENGINE
+        if present_count < PASSING_THRESHOLD:
+            status = "ABSENT"
+            if present_count > 0: notes = "Low Attendance"
+        else:
+            status = "PRESENT"
+            
+            # Check Patterns
+            start_missing = (not record[0] and not record[1])
+            end_missing   = (not record[-1] and not record[-2])
+
+            if start_missing:
+                status = "LATE ENTRY"
+                notes = "Missed start"
+            elif end_missing:
+                status = "EARLY EXIT"
+                notes = "Left early"
+
+        print(f" {name}: {status} {record}")
+        
+        # 6. LOG TO DATABASE
+        log_to_db(uid, name, subject, period, date_input, status, notes)
 
 if __name__ == "__main__":
-    run_attendance_system()
+    run_class_session()
