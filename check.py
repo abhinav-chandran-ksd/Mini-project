@@ -3,158 +3,118 @@ import face_recognition
 import pyodbc
 import json
 import numpy as np
+import time
 
-# --- CONFIGURATION ---
 SERVER_NAME = 'localhost'
 DB_NAME = 'attendance_ai'
-TOLERANCE = 0.6 
 
-# --- DATABASE CONNECTION ---
+TOLERANCE = 0.45         
+SNAPSHOT_INTERVAL = 2    
+TOTAL_SNAPSHOTS = 5      
+PASSING_THRESHOLD = 2    
+
 def get_db_connection():
-    return pyodbc.connect(
-        f'DRIVER={{ODBC Driver 17 for SQL Server}};'
-        f'SERVER={SERVER_NAME};'
-        f'DATABASE={DB_NAME};'
-        'Trusted_Connection=yes;'
-    )
+    return pyodbc.connect(f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={SERVER_NAME};DATABASE={DB_NAME};Trusted_Connection=yes;')
 
-# --- LOGGING FUNCTION (No Time, Just Period) ---
-def log_to_db(uid, name, subject, period, date_str):
+def log_to_db(uid, name, class_name, subject, period, date_str, status, notes=""):
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
+        final_status = f"{status} ({notes})" if notes else status
         
-        # We removed 'log_time' from this query
-        sql = """
-            INSERT INTO attendance_log 
-            (student_uid, student_name, subject_name, period_number, log_date, status)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """
-        values = (uid, name, subject, period, date_str, 'Present')
+        cursor.execute("""
+            SELECT log_id FROM attendance_log 
+            WHERE student_uid=? AND log_date=? AND period_number=? AND subject_name=?
+        """, (uid, date_str, period, subject))
         
-        cursor.execute(sql, values)
+        existing_record = cursor.fetchone()
+        
+        if existing_record:
+            cursor.execute("UPDATE attendance_log SET status=?, class_name=?, student_name=? WHERE log_id=?", 
+                           (final_status, class_name, name, existing_record[0]))
+        else:
+            cursor.execute("""
+                INSERT INTO attendance_log (student_uid, student_name, class_name, subject_name, period_number, log_date, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (uid, name, class_name, subject, period, date_str, final_status))
+            
         conn.commit()
         conn.close()
-        print(f" [DB] SUCCESS: Attendance saved for {name} (Period {period}).")
-        
     except Exception as e:
-        print(f" [DB] ERROR: Could not save log. {e}")
+        print(f"CRITICAL DB ERROR: {e}")
 
-# --- MAIN SYSTEM ---
-def run_attendance_system():
-    # 1. GET SESSION DETAILS
-    print("--- ATTENDANCE SESSION SETUP ---")
-    subject = input("Enter Subject (e.g., Math): ")
-    period  = input("Enter Period Number (e.g., 1): ")
-    date_input = input("Enter Date (YYYY-MM-DD): ")
-    
-    # 2. LOAD ENCODINGS FROM DB
-    print("\n--- LOADING DATABASE ---")
-    known_encodings = []
-    known_names = []
-    known_uids = []
-
+def get_students_by_class(target_class):
+    known_encodings, known_names, known_uids = [], [], []
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT uid, name, encoding FROM face_data")
-        rows = cursor.fetchall()
-        conn.close()
-
-        for row in rows:
+        cursor.execute("SELECT uid, name, encoding FROM face_data WHERE class_name = ?", (target_class,))
+        for row in cursor.fetchall():
             known_uids.append(row[0])
             known_names.append(row[1])
             known_encodings.append(np.array(json.loads(row[2])))
-            
-        print(f"Loaded {len(known_names)} students.")
+        conn.close()
+    except: pass
+    return known_uids, known_names, known_encodings
 
-    except Exception as e:
-        print(f"Error loading DB: {e}")
-        return
+def run_class_session(class_name, subject, period, date_input):
+    all_uids, all_names, all_encodings = get_students_by_class(class_name)
+    if not all_uids: return
+        
+    attendance_sheet = {uid: [False]*TOTAL_SNAPSHOTS for uid in all_uids}
+    uid_to_name = {uid: name for uid, name in zip(all_uids, all_names)}
 
-    # 3. CAPTURE IMAGE
     cam = cv2.VideoCapture(0)
-    print("\n--- CAMERA ACTIVE: PRESS 'SPACE' TO MARK ATTENDANCE ---")
+    for i in range(TOTAL_SNAPSHOTS):
+        start_time = time.time()
+        
+        while True:
+            ret, frame = cam.read()
+            if not ret: break
+            time_left = int((start_time + SNAPSHOT_INTERVAL) - time.time())
+            
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            face_locations = face_recognition.face_locations(rgb_frame)
+            face_encodings_in_frame = face_recognition.face_encodings(rgb_frame, face_locations)
+
+            for (top, right, bottom, left), face_encoding in zip(face_locations, face_encodings_in_frame):
+                matches = face_recognition.compare_faces(all_encodings, face_encoding, tolerance=TOLERANCE)
+                face_distances = face_recognition.face_distance(all_encodings, face_encoding)
+                
+                name_to_display = "Unknown"
+                box_color = (0, 0, 255) 
+                
+                if len(face_distances) > 0:
+                    best_match_index = np.argmin(face_distances)
+                    if face_distances[best_match_index] <= TOLERANCE:
+                        matched_uid = all_uids[best_match_index]
+                        name_to_display = uid_to_name[matched_uid]
+                        box_color = (0, 255, 0) 
+                        
+                        if time_left <= 0:
+                            attendance_sheet[matched_uid][i] = True
+
+                cv2.rectangle(frame, (left, top), (right, bottom), box_color, 2)
+                cv2.putText(frame, name_to_display, (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, box_color, 2)
+
+            cv2.putText(frame, f"Scanning {class_name} | Photo {i+1}/{TOTAL_SNAPSHOTS} in {max(0, time_left)}s", 
+                        (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            cv2.imshow("Teacher Desk Scanner", frame)
+            cv2.waitKey(1)
+            
+            if time_left <= 0: break 
     
-    original_frame = None
-
-    while True:
-        ret, frame = cam.read()
-        if not ret: break
-        
-        # Display instructions on screen
-        cv2.putText(frame, f"Subject: {subject} | Period: {period}", (20, 40), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
-        
-        cv2.imshow("Attendance Scanner", frame)
-        
-        k = cv2.waitKey(1)
-        if k % 256 == 32: # SPACE pressed
-            original_frame = frame
-            break
-        elif k % 256 == 27: # ESC pressed
-            cam.release()
-            cv2.destroyAllWindows()
-            return
-
     cam.release()
     cv2.destroyAllWindows()
 
-    # 4. PROCESSING (Gray -> Detect -> Encode)
-    print("Processing image...")
-    gray_image = cv2.cvtColor(original_frame, cv2.COLOR_BGR2GRAY)
-    face_locations = face_recognition.face_locations(gray_image)
+    for uid in all_uids:
+        present_count = sum(attendance_sheet[uid])
+        name = uid_to_name[uid]
+        status, notes = "ABSENT", ""
 
-    if not face_locations:
-        print("❌ No face detected.")
-        return
+        if present_count < PASSING_THRESHOLD:
+            if present_count > 0: notes = "Low Accuracy"
+        else:
+            status = "PRESENT"
 
-    rgb_image = cv2.cvtColor(original_frame, cv2.COLOR_BGR2RGB)
-    unknown_encodings = face_recognition.face_encodings(rgb_image, face_locations)
-    
-    if not unknown_encodings:
-        print("❌ Could not encode face.")
-        return
-
-    target_encoding = unknown_encodings[0]
-
-    # 5. COMPARE
-    distances = face_recognition.face_distance(known_encodings, target_encoding)
-    best_match_index = np.argmin(distances)
-    best_distance = distances[best_match_index]
-
-    if best_distance < TOLERANCE:
-        # --- MATCH FOUND ---
-        matched_uid = known_uids[best_match_index]
-        matched_name = known_names[best_match_index]
-
-        print("\n" + "="*40)
-        print(f" ✅ MATCH CONFIRMED")
-        print(f" Student: {matched_name}")
-        print(f" UID:     {matched_uid}")
-        print("="*40)
-
-        # --- LOG TO DB (Without Time) ---
-        log_to_db(matched_uid, matched_name, subject, period, date_input)
-
-        # Draw Green Box
-        top, right, bottom, left = face_locations[0]
-        cv2.rectangle(original_frame, (left, top), (right, bottom), (0, 255, 0), 2)
-        cv2.putText(original_frame, f"{matched_name} - PRESENT", (left, bottom + 30), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        
-    else:
-        # --- NO MATCH ---
-        print(f"\n❌ UNKNOWN STUDENT")
-        top, right, bottom, left = face_locations[0]
-        cv2.rectangle(original_frame, (left, top), (right, bottom), (0, 0, 255), 2)
-        cv2.putText(original_frame, "UNKNOWN", (left, bottom + 30), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-
-    # Show Final Result
-    cv2.imshow("Final Result", original_frame)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
-
-if __name__ == "__main__":
-    run_attendance_system()
+        log_to_db(uid, name, class_name, subject, period, date_input, status, notes)
