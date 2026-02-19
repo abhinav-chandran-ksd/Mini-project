@@ -1,0 +1,33 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="row justify-content-center mt-2">
+    <div class="col-md-9 text-center">
+        <h2 class="fw-bold mb-4 text-dark">Faculty Dashboard</h2>
+
+        {% if error %}
+        <div class="alert alert-danger py-3 mb-4 fw-bold shadow-sm">
+            🚨 {{ error }}
+        </div>
+        {% endif %}
+
+        <div class="row g-4 mt-2 text-start">
+            <div class="col-md-6">
+                <div class="card p-4 h-100">
+                    <h4 class="fw-bold text-dark mb-3">📸 Subject Attendance Portal</h4>
+                    <p class="text-muted mb-4">Activate the AI camera to scan student faces and log daily attendance for your assigned subjects.</p>
+                    <a href="/subject_teacher" class="btn btn-primary mt-auto py-2 w-100">Open Subject Scanner</a>
+                </div>
+            </div>
+
+            <div class="col-md-6">
+                <div class="card p-4 h-100">
+                    <h4 class="fw-bold text-dark mb-3">📊 Class Advisor Master</h4>
+                    <p class="text-muted mb-4">View comprehensive attendance reports, analytics, and track students in your advisory class.</p>
+                    <a href="/class_teacher" class="btn btn-secondary mt-auto py-2 w-100">Open Master Report</a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

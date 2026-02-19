@@ -1,0 +1,89 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-md-12">
+        <h2 class="fw-bold text-dark">📚 {{ my_subject }} - Attendance Portal</h2>
+        <a href="/teacher_hub" class="text-decoration-none text-primary">← Back to Hub</a>
+    </div>
+</div>
+
+{% if msg %}
+<div class="alert alert-success fw-bold shadow-sm py-3 mb-4">✨ {{ msg }}</div>
+{% endif %}
+
+<div class="row g-4 mb-5">
+    <div class="col-md-6">
+        <div class="card p-4 h-100 shadow-sm border-0">
+            <h4 class="fw-bold mb-3 text-dark">📷 Start AI Scan</h4>
+            <form method="POST">
+                <input type="hidden" name="action" value="take_attendance">
+                <div class="mb-3">
+                    <label class="form-label text-secondary fw-bold">Class Name</label>
+                    <input type="text" name="class_name" class="form-control" placeholder="e.g. S6 CSA" required>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label text-secondary fw-bold">Period Number</label>
+                    <input type="number" name="period" class="form-control" min="1" max="8" required>
+                </div>
+                <div class="mb-4">
+                    <label class="form-label text-secondary fw-bold">Date</label>
+                    <input type="date" name="date" class="form-control" required>
+                </div>
+                <button type="submit" class="btn btn-primary w-100 py-2 fs-5">Start Camera & Scan</button>
+            </form>
+        </div>
+    </div>
+    
+    <div class="col-md-6">
+        <div class="card p-4 h-100 shadow-sm border-0">
+            <h4 class="fw-bold mb-3 text-dark">📑 Subject Report</h4>
+            <p class="text-muted">Pull recent attendance records for your subject.</p>
+            <form method="POST" class="mt-auto">
+                <input type="hidden" name="action" value="get_report">
+                <div class="mb-4">
+                    <label class="form-label text-secondary fw-bold">Class Name</label>
+                    <input type="text" name="class_name" class="form-control" placeholder="e.g. S6 CSA" required>
+                </div>
+                <button type="submit" class="btn btn-secondary w-100 py-2 fs-5">Fetch Records</button>
+            </form>
+        </div>
+    </div>
+</div>
+
+{% if logs %}
+<div class="card p-4 shadow-sm border-0">
+    <h5 class="fw-bold mb-3">Recent Logs</h5>
+    <div class="table-responsive">
+        <table class="table table-hover table-bordered align-middle">
+            <thead class="table-dark">
+                <tr>
+                    <th>Date</th>
+                    <th>UID</th>
+                    <th>Name</th>
+                    <th>Class</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for log in logs %}
+                <tr>
+                    <td>{{ log[4] }}</td>
+                    <td class="fw-bold text-secondary">{{ log[0] }}</td>
+                    <td>{{ log[1] }}</td>
+                    <td>{{ log[2] }}</td>
+                    <td>
+                        {% if log[5]|lower == 'present' %}
+                        <span class="badge bg-success px-3 py-2">Present</span>
+                        {% else %}
+                        <span class="badge bg-danger px-3 py-2">Absent</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

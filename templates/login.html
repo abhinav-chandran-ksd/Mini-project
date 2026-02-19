@@ -1,0 +1,28 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="row justify-content-center mt-5">
+    <div class="col-md-5">
+        <div class="card p-5">
+            <h3 class="text-center fw-bold mb-2 text-dark">System Login</h3>
+            <p class="text-center text-muted mb-4">Enter your credentials to continue</p>
+            
+            {% if error %}
+            <div class="alert alert-danger py-2 text-center fw-bold rounded">{{ error }}</div>
+            {% endif %}
+            
+            <form method="POST">
+                <div class="mb-4">
+                    <label class="form-label text-secondary fw-bold">Username / UID</label>
+                    <input type="text" name="username" class="form-control form-control-lg" placeholder="e.g. U2303001" required autofocus>
+                </div>
+                <div class="mb-4">
+                    <label class="form-label text-secondary fw-bold">Password</label>
+                    <input type="password" name="password" class="form-control form-control-lg" placeholder="••••••••" required>
+                </div>
+                <button type="submit" class="btn btn-primary w-100 btn-lg mt-2">Secure Login</button>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,41 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="card p-4 shadow-sm mb-4 border-0">
+    <h3 class="fw-bold text-dark mb-4">👋 Welcome, {{ username }}</h3>
+    <h5 class="text-secondary mb-3">Your Attendance Records</h5>
+    
+    <div class="table-responsive">
+        <table class="table table-hover table-bordered align-middle">
+            <thead class="table-dark">
+                <tr>
+                    <th>Date</th>
+                    <th>Class</th>
+                    <th>Subject</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for log in logs %}
+                <tr>
+                    <td>{{ log[2] }}</td>
+                    <td>{{ log[0] }}</td>
+                    <td>{{ log[1] }}</td>
+                    <td>
+                        {% if log[3]|lower == 'present' %}
+                        <span class="badge bg-success px-3 py-2">Present</span>
+                        {% else %}
+                        <span class="badge bg-danger px-3 py-2">Absent</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="4" class="text-center text-muted py-4">No attendance records found yet.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
