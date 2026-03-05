@@ -1,9 +1,10 @@
-import cv2 # OpenCV for webcam access 
-import face_recognition # Face recognition library
+import cv2 
+import face_recognition 
 import pyodbc 
-import json # face encoding into json string
-import numpy as np # for averaging face encodings
-import time # for snapshot timing
+import json 
+import numpy as np 
+import time 
+import threading # Added for multi-threading
 
 SERVER_NAME = 'localhost'
 DB_NAME = 'attendance_ai'
@@ -13,6 +14,11 @@ SNAPSHOT_INTERVAL = 2
 TOTAL_SNAPSHOTS = 6
 PRESENT_THRESHOLD = 4
 
+# --- GLOBAL VARIABLES FOR THREAD SHARING ---
+latest_frame = None
+latest_detections = []
+running = True
+
 def get_db_connection():
     return pyodbc.connect(
         f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={SERVER_NAME};'
@@ -20,15 +26,8 @@ def get_db_connection():
     )
 
 def determine_status(snapshot_results):
-    """
-    Rules (checked in order):
-      - Late Entry  : first 3 all False  AND at least 1 of last 3 True
-      - Early Exit  : last 3 all False   AND at least 1 of first 3 True
-      - Present     : 4 or more True
-      - Absent      : everything else
-    """
-    first_half = snapshot_results[:3]   # snapshots 1-3
-    last_half  = snapshot_results[3:]   # snapshots 4-6
+    first_half = snapshot_results[:3]   
+    last_half  = snapshot_results[3:]   
     total_present = sum(snapshot_results)
 
     if not any(first_half) and any(last_half):
@@ -39,7 +38,6 @@ def determine_status(snapshot_results):
         return "PRESENT"
     return "ABSENT"
 
-# Check if attendance already exists
 def log_to_db(uid, name, class_name, subject, period, date_str, status):
     try:
         conn = get_db_connection()
@@ -86,75 +84,131 @@ def get_students_by_class(target_class):
         pass
     return known_uids, known_names, known_encodings
 
+# --- MODULE 1: AI Processing Thread ---
+def process_faces_worker(all_uids, all_encodings, uid_to_name, attendance_sheet, start_time):
+    global latest_frame, latest_detections, running
+
+    while running:
+        # Grab a copy of the latest frame safely
+        if latest_frame is None:
+            time.sleep(0.05)
+            continue
+        
+        frame_to_process = latest_frame.copy()
+
+        # Determine which snapshot window we are currently in
+        elapsed = time.time() - start_time
+        snapshot_idx = int(elapsed // SNAPSHOT_INTERVAL)
+
+        if snapshot_idx >= TOTAL_SNAPSHOTS:
+            break
+
+        # Heavy AI Computation
+        rgb_frame = cv2.cvtColor(frame_to_process, cv2.COLOR_BGR2RGB)
+        face_locations = face_recognition.face_locations(rgb_frame)
+        face_encodings_frame = face_recognition.face_encodings(rgb_frame, face_locations)
+
+        current_detections = []
+
+        for (top, right, bottom, left), face_enc in zip(face_locations, face_encodings_frame):
+            name_to_display = "Unknown"
+            box_color = (0, 0, 255)
+
+            if all_encodings:
+                distances = face_recognition.face_distance(all_encodings, face_enc)
+                best_idx = int(np.argmin(distances))
+
+                if distances[best_idx] <= TOLERANCE:
+                    matched_uid = all_uids[best_idx]
+                    name_to_display = uid_to_name[matched_uid]
+                    box_color = (0, 255, 0)
+
+                    # Mark them present for this specific snapshot window
+                    if snapshot_idx < TOTAL_SNAPSHOTS:
+                        attendance_sheet[matched_uid][snapshot_idx] = True
+
+            # Save coordinates for the camera thread to draw
+            current_detections.append((left, top, right, bottom, name_to_display, box_color))
+
+        # Push the newest detections to the global variable
+        latest_detections = current_detections
+
+        # Tiny sleep to prevent locking up the CPU completely
+        time.sleep(0.01)
+
+# --- MODULE 2: Camera & Display (Main Thread) ---
 def run_class_session(class_name, subject, period, date_input):
+    global running, latest_frame, latest_detections
+    
+    # Reset globals for a new session
+    running = True
+    latest_frame = None
+    latest_detections = []
+
     all_uids, all_names, all_encodings = get_students_by_class(class_name)
     if not all_uids:
         print("No students found for this class.")
         return
 
-    # attendance_sheet[uid] = [False, False, False, False, False, False]
     attendance_sheet = {uid: [False] * TOTAL_SNAPSHOTS for uid in all_uids}
     uid_to_name = dict(zip(all_uids, all_names))
 
+    # Start the camera
     cam = cv2.VideoCapture(0)
+    start_time = time.time()
 
-    for i in range(TOTAL_SNAPSHOTS):
-        start_time = time.time()
-        snapshot_taken = False
+    # Launch the AI in a background thread
+    ai_thread = threading.Thread(
+        target=process_faces_worker, 
+        args=(all_uids, all_encodings, uid_to_name, attendance_sheet, start_time)
+    )
+    ai_thread.start()
 
-        while True:
-            ret, frame = cam.read()
-            if not ret:
-                break
+    while running:
+        ret, frame = cam.read()
+        if not ret:
+            break
 
-            elapsed   = time.time() - start_time
-            time_left = int(SNAPSHOT_INTERVAL - elapsed)
+        # Send frame to the AI thread
+        latest_frame = frame.copy()
 
-            rgb_frame            = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            face_locations       = face_recognition.face_locations(rgb_frame)
-            face_encodings_frame = face_recognition.face_encodings(rgb_frame, face_locations)
-
-            for (top, right, bottom, left), face_enc in zip(face_locations, face_encodings_frame):
-                name_to_display = "Unknown"
-                box_color       = (0, 0, 255)
-
-                if all_encodings:
-                    distances       = face_recognition.face_distance(all_encodings, face_enc)
-                    best_idx        = int(np.argmin(distances))
-
-                    if distances[best_idx] <= TOLERANCE:
-                        matched_uid     = all_uids[best_idx]
-                        name_to_display = uid_to_name[matched_uid]
-                        box_color       = (0, 255, 0)
-
-                        # Mark attendance when the snapshot window closes
-                        if elapsed >= SNAPSHOT_INTERVAL and not snapshot_taken:
-                            attendance_sheet[matched_uid][i] = True
-
-                cv2.rectangle(frame, (left, top), (right, bottom), box_color, 2)
-                cv2.putText(
-                    frame, name_to_display,
-                    (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, box_color, 2
-                )
-
-            label = (
-                f"Scanning {class_name} | "
-                f"Photo {i + 1}/{TOTAL_SNAPSHOTS} | "
-                f"Next in {max(0, time_left)}s"
-            )
+        # Draw the most recent AI results
+        for (left, top, right, bottom, name_to_display, box_color) in latest_detections:
+            cv2.rectangle(frame, (left, top), (right, bottom), box_color, 2)
             cv2.putText(
-                frame, label,
-                (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2
+                frame, name_to_display,
+                (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, box_color, 2
             )
-            cv2.imshow("Teacher Desk Scanner", frame)
-            cv2.waitKey(1)
 
-            if elapsed >= SNAPSHOT_INTERVAL:
-                snapshot_taken = True
-                break
+        # Calculate time
+        elapsed = time.time() - start_time
+        snapshot_idx = int(elapsed // SNAPSHOT_INTERVAL)
+        time_left = SNAPSHOT_INTERVAL - (elapsed % SNAPSHOT_INTERVAL)
 
+        if snapshot_idx >= TOTAL_SNAPSHOTS:
+            running = False
+            break
+
+        # UI Text
+        label = (
+            f"Scanning {class_name} | "
+            f"Photo {snapshot_idx + 1}/{TOTAL_SNAPSHOTS} | "
+            f"Next in {int(time_left)}s"
+        )
+        cv2.putText(
+            frame, label,
+            (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2
+        )
+
+        cv2.imshow("Teacher Desk Scanner", frame)
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            running = False
+            break
+
+    # Cleanup
     cam.release()
     cv2.destroyAllWindows()
+    ai_thread.join() # Wait for the background AI to safely finish
 
     # Evaluate and log every student
     for uid in all_uids:
