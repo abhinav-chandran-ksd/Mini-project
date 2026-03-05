@@ -1,83 +1,165 @@
 {% extends 'base.html' %}
 
 {% block content %}
-<div class="row mb-4">
-    <div class="col-md-12">
-        <h2 class="fw-bold text-dark">📚 {{ my_subject }} - Attendance Portal</h2>
-        <a href="/teacher_hub" class="text-decoration-none text-primary">← Back to Hub</a>
-    </div>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<style>
+    /* Prevent table from cutting off our hover menus */
+    .table-responsive { overflow: visible !important; }
+    
+    /* HOVER EFFECT: Show pencil only on row hover */
+    .record-row .edit-btn { opacity: 0; transition: opacity 0.2s ease; cursor: pointer; font-size: 1.2rem; }
+    .record-row:hover .edit-btn { opacity: 1; }
+    
+    .status-cell { min-width: 150px; position: relative; }
+
+    /* The Popover Menu - Cross/Circular arrangement */
+    .status-edit-popover {
+        display: none;
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        z-index: 1050;
+        background: rgba(255, 255, 255, 0.95);
+        padding: 12px;
+        border-radius: 12px;
+        box-shadow: 0 8px 25px rgba(0,0,0,0.2);
+        border: 1px solid #e9ecef;
+        flex-direction: column;
+        align-items: center;
+        gap: 6px;
+    }
+    .status-edit-popover.active { display: flex; }
+    .status-display.hidden { visibility: hidden; }
+</style>
+
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2 class="fw-bold text-dark m-0">📘 Subject Teacher: {{ my_subject }}</h2>
+    <a href="/teacher_hub" class="btn btn-outline-secondary fw-bold px-4 py-2">← Back to Hub</a>
 </div>
 
 {% if msg %}
-<div class="alert alert-success fw-bold shadow-sm py-3 mb-4">✨ {{ msg }}</div>
+<div class="alert alert-info shadow-sm fw-bold border-0 text-center rounded-3">{{ msg }}</div>
 {% endif %}
 
 <div class="row g-4 mb-5">
     <div class="col-md-6">
-        <div class="card p-4 h-100 shadow-sm border-0">
-            <h4 class="fw-bold mb-3 text-dark">📷 Start AI Scan</h4>
-            <form method="POST">
+        <div class="card p-4 shadow-sm border-0 rounded-3 h-100 bg-white">
+            <h5 class="fw-bold text-primary mb-3">📸 Run AI Attendance Scan</h5>
+            <form method="POST" action="/subject_teacher">
                 <input type="hidden" name="action" value="take_attendance">
                 <div class="mb-3">
-                    <label class="form-label text-secondary fw-bold">Class Name</label>
-                    <input type="text" name="class_name" class="form-control" placeholder="e.g. S6 CSA" required>
+                    <label class="form-label text-muted fw-bold small">Select Class</label>
+                    <select name="class_name" class="form-select" required>
+                        <option value="S6 CSA">S6 CSA</option>
+                        <option value="S6 CSB">S6 CSB</option>
+                    </select>
                 </div>
-                <div class="mb-3">
-                    <label class="form-label text-secondary fw-bold">Period Number</label>
-                    <input type="number" name="period" class="form-control" min="1" max="8" required>
+                <div class="row g-2 mb-3">
+                    <div class="col-md-6">
+                        <label class="form-label text-muted fw-bold small">Period</label>
+                        <input type="number" name="period" class="form-control" placeholder="e.g. 1" required>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label text-muted fw-bold small">Date</label>
+                        <input type="date" name="date" class="form-control" required>
+                    </div>
                 </div>
-                <div class="mb-4">
-                    <label class="form-label text-secondary fw-bold">Date</label>
-                    <input type="date" name="date" class="form-control" required>
-                </div>
-                <button type="submit" class="btn btn-primary w-100 py-2 fs-5">Start Camera & Scan</button>
+                <button type="submit" class="btn btn-primary w-100 fw-bold py-2">Start Camera Scan</button>
             </form>
         </div>
     </div>
-    
+
     <div class="col-md-6">
-        <div class="card p-4 h-100 shadow-sm border-0">
-            <h4 class="fw-bold mb-3 text-dark">📑 Subject Report</h4>
-            <p class="text-muted">Pull recent attendance records for your subject.</p>
-            <form method="POST" class="mt-auto">
+        <div class="card p-4 shadow-sm border-0 rounded-3 h-100 bg-white">
+            <h5 class="fw-bold text-success mb-3">📥 Fetch Class Report</h5>
+            <form method="POST" action="/subject_teacher">
                 <input type="hidden" name="action" value="get_report">
                 <div class="mb-4">
-                    <label class="form-label text-secondary fw-bold">Class Name</label>
-                    <input type="text" name="class_name" class="form-control" placeholder="e.g. S6 CSA" required>
+                    <label class="form-label text-muted fw-bold small">Select Class</label>
+                    <select name="class_name" class="form-select" required>
+                        <option value="S6 CSA">S6 CSA</option>
+                        <option value="S6 CSB">S6 CSB</option>
+                    </select>
                 </div>
-                <button type="submit" class="btn btn-secondary w-100 py-2 fs-5">Fetch Records</button>
+                <button type="submit" class="btn btn-success w-100 fw-bold py-2 mt-auto">Fetch Records</button>
             </form>
         </div>
     </div>
 </div>
 
 {% if logs %}
-<div class="card p-4 shadow-sm border-0">
-    <h5 class="fw-bold mb-3">Recent Logs</h5>
-    <div class="table-responsive">
-        <table class="table table-hover table-bordered align-middle">
-            <thead class="table-dark">
+<div class="card p-4 shadow-sm mb-4 border-0 rounded-3 bg-white">
+    
+    <div class="row align-items-center mb-4 pb-4 border-bottom">
+        <div class="col-md-4 text-center">
+            <h5 class="fw-bold text-dark mb-1">Overall Attendance</h5>
+            <p class="text-muted small mb-2" id="chartSubtext">Based on visible records</p>
+            <div style="height: 160px; position: relative;" class="d-flex justify-content-center">
+                <canvas id="attendanceChart"></canvas>
+            </div>
+            <h4 id="chartPercentText" class="fw-bold mt-2 mb-0"></h4>
+        </div>
+        
+        <div class="col-md-8">
+            <div class="bg-light p-3 rounded-3 border">
+                <strong class="text-secondary d-block mb-3">🔍 Filter Records:</strong>
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <label class="form-label text-muted small fw-bold mb-1">Specific Date</label>
+                        <input type="date" id="filterDate" class="form-control" onchange="filterTableAndUpdateChart()">
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label text-muted small fw-bold mb-1">Search UID</label>
+                        <input type="text" id="filterUID" class="form-control" placeholder="e.g. U2303001" onkeyup="filterTableAndUpdateChart()">
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="table-responsive shadow-sm rounded-3">
+        <table class="table table-hover table-bordered align-middle m-0" id="logTable">
+            <thead class="table-light">
                 <tr>
                     <th>Date</th>
                     <th>UID</th>
-                    <th>Name</th>
+                    <th>Student Name</th>
                     <th>Class</th>
                     <th>Status</th>
                 </tr>
             </thead>
             <tbody>
                 {% for log in logs %}
-                <tr>
-                    <td>{{ log[4] }}</td>
-                    <td class="fw-bold text-secondary">{{ log[0] }}</td>
-                    <td>{{ log[1] }}</td>
-                    <td>{{ log[2] }}</td>
-                    <td>
-                        {% if log[5]|lower == 'present' %}
-                        <span class="badge bg-success px-3 py-2">Present</span>
-                        {% else %}
-                        <span class="badge bg-danger px-3 py-2">Absent</span>
-                        {% endif %}
+                {% set status_lower = log[5]|lower %}
+                <tr class="record-row">
+                    <td class="log-date text-muted fw-bold">{{ log[4] }}</td>
+                    <td class="fw-bold text-dark log-uid">{{ log[0] }}</td>
+                    <td class="log-name">{{ log[1] }}</td>
+                    <td><span class="badge bg-secondary px-2 py-1">{{ log[2] }}</span></td>
+                    
+                    <td class="status-cell">
+                        <div class="status-display d-flex align-items-center justify-content-between">
+                            <span class="badge status-badge px-3 py-2 w-75 text-center text-uppercase
+                                {% if status_lower == 'present' %}bg-success
+                                {% elif status_lower == 'absent' %}bg-danger
+                                {% else %}bg-warning text-dark{% endif %}" 
+                                data-raw-status="{{ log[5] }}">
+                                {{ log[5] }}
+                            </span>
+                            <span class="edit-btn ms-2" title="Edit" onclick="openPopover(this)">✏️</span>
+                        </div>
+
+                        <div class="status-edit-popover">
+                            <button class="btn btn-sm btn-success fw-bold shadow-sm" style="width: 110px;" onclick="saveStatus(this, '{{ log[0] }}', '{{ log[4] }}', '{{ log[3] }}', 'PRESENT')">Present</button>
+                            <div class="d-flex justify-content-center align-items-center gap-2">
+                                <button class="btn btn-sm btn-warning fw-bold shadow-sm text-dark" style="width: 100px;" onclick="saveStatus(this, '{{ log[0] }}', '{{ log[4] }}', '{{ log[3] }}', 'LATE ENTRY')">Late</button>
+                                <button class="btn btn-sm btn-light border shadow-sm rounded-circle d-flex justify-content-center align-items-center" style="width: 32px; height: 32px; padding: 0;" onclick="closePopover(this)" title="Cancel">✕</button>
+                                <button class="btn btn-sm btn-warning fw-bold shadow-sm text-dark" style="width: 100px;" onclick="saveStatus(this, '{{ log[0] }}', '{{ log[4] }}', '{{ log[3] }}', 'EARLY EXIT')">Early</button>
+                            </div>
+                            <button class="btn btn-sm btn-danger fw-bold shadow-sm" style="width: 110px;" onclick="saveStatus(this, '{{ log[0] }}', '{{ log[4] }}', '{{ log[3] }}', 'ABSENT')">Absent</button>
+                        </div>
                     </td>
                 </tr>
                 {% endfor %}
@@ -86,4 +168,125 @@
     </div>
 </div>
 {% endif %}
+
+<script>
+    let myChart = null;
+
+    document.addEventListener("DOMContentLoaded", function() {
+        if(document.getElementById("logTable")) {
+            updateChart(); 
+        }
+    });
+
+    function openPopover(pencilIcon) {
+        let td = pencilIcon.closest('.status-cell');
+        td.querySelector('.status-display').classList.add('hidden');
+        td.querySelector('.status-edit-popover').classList.add('active');
+    }
+
+    function closePopover(btn) {
+        let td = btn.closest('.status-cell');
+        td.querySelector('.status-edit-popover').classList.remove('active');
+        td.querySelector('.status-display').classList.remove('hidden');
+    }
+
+    function saveStatus(btn, uid, logDate, subject, newStatus) {
+        let td = btn.closest('.status-cell');
+        let badge = td.querySelector('.status-badge');
+        
+        // Instantly update UI Badge
+        badge.innerText = newStatus;
+        badge.setAttribute("data-raw-status", newStatus);
+        
+        // Changed JS to check against ALL CAPS versions
+        badge.className = "badge status-badge px-3 py-2 w-75 text-center text-uppercase"; 
+        if (newStatus === "PRESENT") badge.classList.add("bg-success");
+        else if (newStatus === "ABSENT") badge.classList.add("bg-danger");
+        else badge.classList.add("bg-warning", "text-dark"); 
+
+        closePopover(btn);
+        updateChart(); 
+
+        fetch('/update_status_api', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ uid: uid, log_date: logDate, subject: subject, new_status: newStatus })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if(!data.success) alert("Database save failed: " + data.error);
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            alert("Network error. Could not connect to database.");
+        });
+    }
+
+    function filterTableAndUpdateChart() {
+        let dateVal = document.getElementById("filterDate").value;
+        let uidVal = document.getElementById("filterUID").value.toUpperCase();
+
+        let rows = document.getElementById("logTable").getElementsByTagName("tbody")[0].getElementsByTagName("tr");
+        for (let i = 0; i < rows.length; i++) {
+            let rowDate = rows[i].querySelector(".log-date").innerText.trim();
+            let rowUID = rows[i].querySelector(".log-uid").innerText.trim().toUpperCase();
+
+            let showRow = true;
+            if (dateVal && rowDate !== dateVal) showRow = false;
+            if (uidVal && !rowUID.includes(uidVal)) showRow = false;
+
+            rows[i].style.display = showRow ? "" : "none";
+        }
+        
+        updateChart(); 
+    }
+
+    function updateChart() {
+        let rows = document.getElementById("logTable").getElementsByTagName("tbody")[0].getElementsByTagName("tr");
+        let presentCount = 0;
+        let totalCount = 0;
+
+        for (let i = 0; i < rows.length; i++) {
+            if (rows[i].style.display !== "none") {
+                let status = rows[i].querySelector('.status-badge').getAttribute('data-raw-status').toLowerCase();
+                let isPresent = status.includes("present") || status.includes("late") || status.includes("early");
+                
+                totalCount++;
+                if (isPresent) presentCount++;
+            }
+        }
+
+        let absentCount = totalCount - presentCount;
+        let percent = totalCount > 0 ? Math.round((presentCount / totalCount) * 100) : 0;
+        
+        let colorClass = percent >= 75 ? "text-success" : "text-danger";
+        let chartColor = percent >= 75 ? "#10b981" : "#ef4444"; 
+
+        let percentText = document.getElementById("chartPercentText");
+        percentText.innerHTML = `<span class="${colorClass}">${percent}%</span>`;
+        if (totalCount === 0) percentText.innerHTML = `<span class="text-muted fs-6">No data</span>`;
+
+        if(myChart) { myChart.destroy(); }
+
+        let ctx = document.getElementById(`attendanceChart`).getContext('2d');
+        myChart = new Chart(ctx, {
+            type: 'doughnut',
+            data: {
+                labels: ['Present/Late/Early', 'Absent'],
+                datasets: [{ 
+                    data: [presentCount, absentCount], 
+                    backgroundColor: [chartColor, "#f3f4f6"], 
+                    borderWidth: 0, 
+                    cutout: '80%', 
+                    borderRadius: 10 
+                }]
+            },
+            options: { 
+                maintainAspectRatio: false, 
+                plugins: { legend: { display: false }, tooltip: { enabled: true } }, 
+                animation: { animateScale: true } 
+            }
+        });
+    }
+</script>
 {% endblock %}

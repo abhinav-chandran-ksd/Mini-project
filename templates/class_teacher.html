@@ -1,56 +1,393 @@
 {% extends 'base.html' %}
 
 {% block content %}
-<div class="card p-4 shadow-sm mb-4 border-0">
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<style>
+    /* Prevent table from cutting off our hover menus */
+    .table-responsive { overflow: visible !important; }
+    
+    /* HOVER EFFECT: Show pencil only on row hover */
+    .record-row .edit-btn { opacity: 0; transition: opacity 0.2s ease; cursor: pointer; font-size: 1.2rem; }
+    .record-row:hover .edit-btn { opacity: 1; }
+    
+    .status-cell { min-width: 150px; position: relative; }
+
+    /* The Popover Menu - Cross/Circular arrangement of normal buttons */
+    .status-edit-popover {
+        display: none;
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        z-index: 1050;
+        background: rgba(255, 255, 255, 0.95);
+        padding: 12px;
+        border-radius: 12px;
+        box-shadow: 0 8px 25px rgba(0,0,0,0.2);
+        border: 1px solid #e9ecef;
+        flex-direction: column;
+        align-items: center;
+        gap: 6px;
+    }
+
+    .status-edit-popover.active {
+        display: flex; /* Activates the flex layout */
+    }
+
+    .status-display.hidden {
+        visibility: hidden;
+    }
+</style>
+
+<div class="card p-4 shadow-sm mb-4 border-0 rounded-3">
     <div class="d-flex justify-content-between align-items-center mb-4 border-bottom pb-3">
         <div>
             <h2 class="fw-bold text-dark m-0">📊 Master Report: {{ my_class }}</h2>
             <a href="/teacher_hub" class="text-decoration-none text-primary mt-1 d-inline-block">← Back to Hub</a>
         </div>
-        <form method="POST" class="m-0">
-            <button type="submit" class="btn btn-primary px-4 py-2">Refresh Master Data</button>
-        </form>
+        
+        <div class="d-flex gap-2 m-0">
+            {% if logs %}
+            <button id="btnLog" class="btn btn-outline-primary px-4 py-2 fw-bold" onclick="switchView('log')">📋 Log</button>
+            <button id="btnAnalysis" class="btn btn-outline-primary px-4 py-2 fw-bold" onclick="switchView('analysis')">📈 Master Analysis</button>
+            {% endif %}
+            <form method="POST" action="/class_teacher" class="m-0">
+                <button type="submit" class="btn btn-secondary px-4 py-2 fw-bold">↻ Refresh Data</button>
+            </form>
+        </div>
     </div>
-    
-    {% if msg %}
-    <div class="alert alert-info fw-bold py-2">{{ msg }}</div>
-    {% endif %}
 
     {% if logs %}
-    <div class="table-responsive mt-2">
-        <table class="table table-hover table-bordered align-middle">
-            <thead class="table-dark">
-                <tr>
-                    <th>Date</th>
-                    <th>UID</th>
-                    <th>Student Name</th>
-                    <th>Subject</th>
-                    <th>Status</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for log in logs %}
-                <tr>
-                    <td>{{ log[4] }}</td>
-                    <td class="fw-bold text-secondary">{{ log[0] }}</td>
-                    <td>{{ log[1] }}</td>
-                    <td><span class="badge bg-secondary px-2 py-1">{{ log[3] }}</span></td>
-                    <td>
-                        {% if log[5]|lower == 'present' %}
-                        <span class="badge bg-success px-3 py-2">Present</span>
-                        {% else %}
-                        <span class="badge bg-danger px-3 py-2">Absent</span>
-                        {% endif %}
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+    
+    <div id="welcomeScreen" class="text-center py-5">
+        <h4 class="text-secondary fw-bold">Dashboard Ready</h4>
+        <p class="text-muted">Select <strong>📋 Log</strong> or <strong>📈 Master Analysis</strong> above to view your class data.</p>
     </div>
+
+    <div id="logSection" style="display: none;">
+        <div class="row g-3 mb-4 bg-light p-3 rounded-3 shadow-sm border">
+            <div class="col-md-12"><strong class="text-secondary">🔍 Filter Logs:</strong></div>
+            <div class="col-md-4">
+                <label class="form-label text-muted small fw-bold mb-1">Specific Date</label>
+                <input type="date" id="filterDate" class="form-control" onchange="filterLogTable()">
+            </div>
+            <div class="col-md-4">
+                <label class="form-label text-muted small fw-bold mb-1">Search UID</label>
+                <input type="text" id="filterUID" class="form-control" placeholder="e.g. U2303001" onkeyup="filterLogTable()">
+            </div>
+            <div class="col-md-4">
+                <label class="form-label text-muted small fw-bold mb-1">Select Subject</label>
+                <select id="filterSubject" class="form-select" onchange="filterLogTable()">
+                    <option value="">All Subjects</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="table-responsive mt-2 shadow-sm rounded-3">
+            <table class="table table-hover table-bordered align-middle m-0" id="masterTable">
+                <thead class="table-light">
+                    <tr>
+                        <th>Date</th>
+                        <th>UID</th>
+                        <th>Student Name</th>
+                        <th>Subject</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for log in logs %}
+                    {% set status_lower = log[5]|lower %}
+                    <tr class="record-row">
+                        <td class="log-date text-muted fw-bold">{{ log[4] }}</td>
+                        <td class="fw-bold text-dark log-uid">{{ log[0] }}</td>
+                        <td class="log-name">{{ log[1] }}</td>
+                        <td><span class="badge bg-secondary px-2 py-1 log-subject">{{ log[3] }}</span></td>
+                        
+                        <td class="status-cell">
+                            <div class="status-display d-flex align-items-center justify-content-between">
+                                <span class="badge status-badge px-3 py-2 w-75 text-center text-uppercase
+                                    {% if status_lower == 'present' %}bg-success
+                                    {% elif status_lower == 'absent' %}bg-danger
+                                    {% else %}bg-warning text-dark{% endif %}" 
+                                    data-raw-status="{{ log[5] }}">
+                                    {{ log[5] }}
+                                </span>
+                                <span class="edit-btn ms-2" title="Edit" onclick="openPopover(this)">✏️</span>
+                            </div>
+
+                            <div class="status-edit-popover">
+                                <button class="btn btn-sm btn-success fw-bold shadow-sm" style="width: 110px;" onclick="saveStatus(this, '{{ log[0] }}', '{{ log[4] }}', '{{ log[3] }}', 'PRESENT')">Present</button>
+                                
+                                <div class="d-flex justify-content-center align-items-center gap-2">
+                                    <button class="btn btn-sm btn-warning fw-bold shadow-sm text-dark" style="width: 100px;" onclick="saveStatus(this, '{{ log[0] }}', '{{ log[4] }}', '{{ log[3] }}', 'LATE ENTRY')">Late Entry</button>
+                                    
+                                    <button class="btn btn-sm btn-light border shadow-sm rounded-circle d-flex justify-content-center align-items-center" style="width: 32px; height: 32px; padding: 0;" onclick="closePopover(this)" title="Cancel">✕</button>
+                                    
+                                    <button class="btn btn-sm btn-warning fw-bold shadow-sm text-dark" style="width: 100px;" onclick="saveStatus(this, '{{ log[0] }}', '{{ log[4] }}', '{{ log[3] }}', 'EARLY EXIT')">Early Exit</button>
+                                </div>
+
+                                <button class="btn btn-sm btn-danger fw-bold shadow-sm" style="width: 110px;" onclick="saveStatus(this, '{{ log[0] }}', '{{ log[4] }}', '{{ log[3] }}', 'ABSENT')">Absent</button>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div id="analysisSection" style="display: none;">
+        
+        <h4 class="fw-bold text-dark mb-4 text-center">Class Subject Performance</h4>
+        <div id="chartsContainer" class="row g-4 justify-content-center mb-5"></div>
+        <hr class="my-4 text-muted">
+        <div class="row g-3 mb-4 bg-light p-3 rounded-3 shadow-sm border border-primary">
+            <div class="col-md-12"><strong class="text-primary">⚙️ Analysis Parameters:</strong></div>
+            <div class="col-md-3">
+                <label class="form-label text-muted small fw-bold mb-1">Start Date</label>
+                <input type="date" id="anaStartDate" class="form-control" onchange="generateAnalysisAndCharts()">
+            </div>
+            <div class="col-md-3">
+                <label class="form-label text-muted small fw-bold mb-1">End Date</label>
+                <input type="date" id="anaEndDate" class="form-control" onchange="generateAnalysisAndCharts()">
+            </div>
+            <div class="col-md-3">
+                <label class="form-label text-muted small fw-bold mb-1">Filter by UID</label>
+                <input type="text" id="anaUID" class="form-control" placeholder="Search UID..." onkeyup="generateAnalysisAndCharts()">
+            </div>
+            <div class="col-md-3">
+                <label class="form-label text-muted small fw-bold mb-1">Filter by Subject</label>
+                <select id="anaSubject" class="form-select" onchange="generateAnalysisAndCharts()">
+                    <option value="">All Subjects</option>
+                </select>
+            </div>
+        </div>
+        <h5 class="fw-bold text-dark mb-3">Individual Student Breakdown</h5>
+        <div class="table-responsive shadow-sm rounded-3">
+            <table class="table table-bordered table-hover align-middle bg-white m-0">
+                <thead class="table-primary">
+                    <tr>
+                        <th>UID</th>
+                        <th>Student Name</th>
+                        <th>Subject</th>
+                        <th>Total Classes</th>
+                        <th>Present (Inc. Late/Early)</th>
+                        <th>Absent</th>
+                        <th>Attendance %</th>
+                    </tr>
+                </thead>
+                <tbody id="analysisBody"></tbody>
+            </table>
+        </div>
+    </div>
+
     {% else %}
     <div class="text-center py-5">
-        <h5 class="text-muted">Click "Refresh Master Data" to load the latest records.</h5>
+        <h5 class="text-muted">No attendance records found. Click "Refresh Data".</h5>
     </div>
     {% endif %}
 </div>
+
+<script>
+    window.myCharts = {};
+
+    document.addEventListener("DOMContentLoaded", function() {
+        populateSubjectDropdowns();
+    });
+
+    function switchView(viewName) {
+        document.getElementById("welcomeScreen").style.display = "none"; 
+        let logSec = document.getElementById("logSection");
+        let anaSec = document.getElementById("analysisSection");
+        let btnLog = document.getElementById("btnLog");
+        let btnAna = document.getElementById("btnAnalysis");
+
+        if (viewName === 'log') {
+            logSec.style.display = "block"; anaSec.style.display = "none";
+            btnLog.className = "btn btn-primary px-4 py-2 fw-bold";
+            btnAna.className = "btn btn-outline-primary px-4 py-2 fw-bold";
+        } else {
+            logSec.style.display = "none"; anaSec.style.display = "block";
+            btnAna.className = "btn btn-primary px-4 py-2 fw-bold";
+            btnLog.className = "btn btn-outline-primary px-4 py-2 fw-bold";
+            generateAnalysisAndCharts(); 
+        }
+    }
+
+    function openPopover(pencilIcon) {
+        let td = pencilIcon.closest('.status-cell');
+        td.querySelector('.status-display').classList.add('hidden');
+        td.querySelector('.status-edit-popover').classList.add('active');
+    }
+
+    function closePopover(btn) {
+        let td = btn.closest('.status-cell');
+        td.querySelector('.status-edit-popover').classList.remove('active');
+        td.querySelector('.status-display').classList.remove('hidden');
+    }
+
+    function saveStatus(btn, uid, logDate, subject, newStatus) {
+        let td = btn.closest('.status-cell');
+        let badge = td.querySelector('.status-badge');
+        
+        // Instantly update UI Badge
+        badge.innerText = newStatus;
+        badge.setAttribute("data-raw-status", newStatus);
+        
+        // Match CSS classes based on ALL CAPS string
+        badge.className = "badge status-badge px-3 py-2 w-75 text-center text-uppercase"; 
+        if (newStatus === "PRESENT") badge.classList.add("bg-success");
+        else if (newStatus === "ABSENT") badge.classList.add("bg-danger");
+        else badge.classList.add("bg-warning", "text-dark"); 
+
+        closePopover(btn);
+
+        fetch('/update_status_api', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ uid: uid, log_date: logDate, subject: subject, new_status: newStatus })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if(!data.success) alert("Database save failed: " + data.error);
+            else if (document.getElementById("analysisSection").style.display === "block") {
+                generateAnalysisAndCharts(); // Update analysis if currently viewing it
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            alert("Network error. Could not connect to database.");
+        });
+    }
+
+    function populateSubjectDropdowns() {
+        let table = document.getElementById("masterTable");
+        if (!table) return;
+        let rows = table.getElementsByTagName("tbody")[0].getElementsByTagName("tr");
+        let subjects = new Set();
+        for (let i = 0; i < rows.length; i++) {
+            subjects.add(rows[i].querySelector(".log-subject").innerText.trim());
+        }
+        let selLog = document.getElementById("filterSubject");
+        let selAna = document.getElementById("anaSubject");
+        subjects.forEach(sub => {
+            selLog.appendChild(new Option(sub, sub));
+            selAna.appendChild(new Option(sub, sub));
+        });
+    }
+
+    function filterLogTable() {
+        let dateVal = document.getElementById("filterDate").value;
+        let uidVal = document.getElementById("filterUID").value.toUpperCase();
+        let subVal = document.getElementById("filterSubject").value.toUpperCase();
+
+        let rows = document.getElementById("masterTable").getElementsByTagName("tbody")[0].getElementsByTagName("tr");
+        for (let i = 0; i < rows.length; i++) {
+            let rowDate = rows[i].querySelector(".log-date").innerText.trim();
+            let rowUID = rows[i].querySelector(".log-uid").innerText.trim().toUpperCase();
+            let rowSub = rows[i].querySelector(".log-subject").innerText.trim().toUpperCase();
+
+            let showRow = true;
+            if (dateVal && rowDate !== dateVal) showRow = false;
+            if (uidVal && !rowUID.includes(uidVal)) showRow = false;
+            if (subVal && rowSub !== subVal) showRow = false;
+
+            rows[i].style.display = showRow ? "" : "none";
+        }
+    }
+
+    function generateAnalysisAndCharts() {
+        let startDate = document.getElementById("anaStartDate").value;
+        let endDate = document.getElementById("anaEndDate").value;
+        let filterUID = document.getElementById("anaUID").value.toUpperCase();
+        let filterSub = document.getElementById("anaSubject").value.toUpperCase();
+
+        let table = document.getElementById("masterTable");
+        if(!table) return;
+        let rows = table.getElementsByTagName("tbody")[0].getElementsByTagName("tr");
+        
+        let studentStats = {}; let subjectStats = {}; 
+
+        for (let i = 0; i < rows.length; i++) {
+            let rowDateStr = rows[i].querySelector(".log-date").innerText.trim();
+            let uid = rows[i].querySelector(".log-uid").innerText.trim();
+            let name = rows[i].querySelector(".log-name").innerText.trim();
+            let subject = rows[i].querySelector(".log-subject").innerText.trim();
+            let status = rows[i].querySelector('.status-badge').getAttribute('data-raw-status').toLowerCase();
+
+            if (startDate && rowDateStr < startDate) continue;
+            if (endDate && rowDateStr > endDate) continue;
+            if (filterUID && !uid.toUpperCase().includes(filterUID)) continue;
+            if (filterSub && subject.toUpperCase() !== filterSub) continue;
+
+            let isPresent = status.includes("present") || status.includes("late") || status.includes("early");
+
+            if (!subjectStats[subject]) subjectStats[subject] = { total: 0, present: 0 };
+            subjectStats[subject].total += 1;
+            if (isPresent) subjectStats[subject].present += 1;
+
+            let key = uid + "|" + subject;
+            if (!studentStats[key]) {
+                studentStats[key] = { uid: uid, name: name, subject: subject, total: 0, present: 0, absent: 0 };
+            }
+            studentStats[key].total += 1;
+            if (isPresent) studentStats[key].present += 1;
+            else studentStats[key].absent += 1;
+        }
+
+        let chartsContainer = document.getElementById("chartsContainer");
+        chartsContainer.innerHTML = ""; 
+
+        for (let sub in subjectStats) {
+            let stats = subjectStats[sub];
+            let percent = stats.total > 0 ? Math.round((stats.present / stats.total) * 100) : 0;
+            let colorClass = percent >= 75 ? "text-success" : "text-danger";
+            let chartColor = percent >= 75 ? "#10b981" : "#ef4444"; 
+
+            let colDiv = document.createElement("div");
+            colDiv.className = "col-md-3 col-sm-6";
+            colDiv.innerHTML = `
+                <div class="card p-3 shadow-sm border-0 text-center h-100 bg-white rounded-3">
+                    <h5 class="fw-bold text-secondary mb-1">${sub}</h5>
+                    <h3 class="${colorClass} fw-bold mb-2" style="font-size: 2rem;">${percent}%</h3>
+                    <div style="height: 130px; position: relative;"><canvas id="chart-${sub}"></canvas></div>
+                </div>
+            `;
+            chartsContainer.appendChild(colDiv);
+
+            if(window.myCharts[sub]) { window.myCharts[sub].destroy(); }
+
+            let ctx = document.getElementById(`chart-${sub}`).getContext('2d');
+            window.myCharts[sub] = new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: ['Present', 'Absent'],
+                    datasets: [{ data: [stats.present, stats.total - stats.present], backgroundColor: [chartColor, "#f3f4f6"], borderWidth: 0, cutout: '80%', borderRadius: 10 }]
+                },
+                options: { maintainAspectRatio: false, plugins: { legend: { display: false } }, animation: { animateScale: true } }
+            });
+        }
+
+        if (Object.keys(subjectStats).length === 0) chartsContainer.innerHTML = `<div class="text-center text-muted">No data found.</div>`;
+
+        let tbodyHTML = "";
+        for (let key in studentStats) {
+            let s = studentStats[key];
+            let percentage = s.total > 0 ? Math.round((s.present / s.total) * 100) : 0;
+            let pctBadge = percentage >= 75 ? `<span class="badge bg-success">${percentage}%</span>` : `<span class="badge bg-danger">${percentage}%</span>`;
+
+            tbodyHTML += `<tr>
+                <td class="fw-bold text-dark">${s.uid}</td>
+                <td>${s.name}</td>
+                <td><span class="badge bg-secondary">${s.subject}</span></td>
+                <td>${s.total}</td>
+                <td><span class="text-success fw-bold">${s.present}</span></td>
+                <td><span class="text-danger fw-bold">${s.absent}</span></td>
+                <td>${pctBadge}</td>
+            </tr>`;
+        }
+        document.getElementById("analysisBody").innerHTML = tbodyHTML;
+    }
+</script>
 {% endblock %}

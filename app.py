@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, session, redirect
+from flask import Flask, render_template, request, session, redirect, jsonify
 import pyodbc
 import check
 import train_face
@@ -102,22 +102,65 @@ def subject_teacher():
 
     return render_template('subject_teacher.html', msg=message, logs=logs, my_subject=my_subject)
 
+# ==========================================
+# FIXED: CLASS TEACHER ROUTE (Handles 404s)
+# ==========================================
 @app.route('/class_teacher', methods=['GET', 'POST'])
-def class_teacher():
+@app.route('/class_teacher/<url_class>', methods=['GET', 'POST'])
+def class_teacher(url_class=None):
     if session.get('role') != 'Teacher': return redirect('/')
+    
+    # Grab class from URL if it exists (e.g., /class_teacher/S6%20CSA), else from session
+    my_class = url_class if url_class else session.get('class_teacher_of')
+    
     logs = []
-    message = ""
-    my_class = session.get('class_teacher_of')
+    message = f"Showing Master Report for {my_class}"
 
-    if request.method == 'POST':
+    # Auto-load the table records on page visit
+    try:
         conn = get_db()
         cursor = conn.cursor()
-        cursor.execute("SELECT student_uid, student_name, class_name, subject_name, log_date, status FROM attendance_log WHERE class_name=? ORDER BY log_date DESC, student_name ASC", (my_class,))
+        cursor.execute("""
+            SELECT student_uid, student_name, class_name, subject_name, log_date, status 
+            FROM attendance_log 
+            WHERE class_name=? 
+            ORDER BY log_date DESC, student_name ASC
+        """, (my_class,))
         logs = cursor.fetchall()
         conn.close()
-        message = f"Showing Master Report for {my_class}"
+    except Exception as e:
+        print(f"Database error: {e}")
 
     return render_template('class_teacher.html', msg=message, logs=logs, my_class=my_class)
+
+# ==========================================
+# NEW: BACKGROUND API FOR STATUS EDITING
+# ==========================================
+@app.route('/update_status_api', methods=['POST'])
+def update_status_api():
+    if session.get('role') != 'Teacher': 
+        return jsonify({'success': False, 'error': 'Unauthorized'}), 401
+        
+    data = request.get_json()
+    uid = data.get('uid')
+    log_date = data.get('log_date')
+    subject = data.get('subject')
+    new_status = data.get('new_status')
+    
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE attendance_log 
+            SET status = ? 
+            WHERE student_uid = ? AND log_date = ? AND subject_name = ?
+        """, (new_status, uid, log_date, subject))
+        conn.commit()
+        conn.close()
+        return jsonify({'success': True, 'new_status': new_status})
+    except Exception as e:
+        print(f"Error updating status: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/student')
 def student():
