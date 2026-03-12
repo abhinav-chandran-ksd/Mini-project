@@ -77,6 +77,11 @@ def teacher_hub():
 @app.route('/subject_teacher', methods=['GET', 'POST'])
 def subject_teacher():
     if session.get('role') != 'Teacher': return redirect('/')
+    
+    # NEW: Kick them back to hub if they are not assigned a subject
+    if not session.get('subject_teacher_of'): 
+        return redirect('/teacher_hub')
+
     message = ""
     logs = []
     my_subject = session.get('subject_teacher_of') 
@@ -110,6 +115,10 @@ def subject_teacher():
 def class_teacher(url_class=None):
     if session.get('role') != 'Teacher': return redirect('/')
     
+    # NEW: Kick them back to hub if they are not assigned an advisory class
+    if not session.get('class_teacher_of'):
+        return redirect('/teacher_hub')
+    
     # Grab class from URL if it exists (e.g., /class_teacher/S6%20CSA), else from session
     my_class = url_class if url_class else session.get('class_teacher_of')
     
@@ -140,7 +149,7 @@ def class_teacher(url_class=None):
 def update_status_api():
     if session.get('role') != 'Teacher': 
         return jsonify({'success': False, 'error': 'Unauthorized'}), 401
-        
+    print("here")
     data = request.get_json()
     uid = data.get('uid')
     log_date = data.get('log_date')

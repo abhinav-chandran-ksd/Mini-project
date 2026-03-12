@@ -50,20 +50,17 @@
             <form method="POST" action="/subject_teacher">
                 <input type="hidden" name="action" value="take_attendance">
                 <div class="mb-3">
-                    <label class="form-label text-muted fw-bold small">Select Class</label>
-                    <select name="class_name" class="form-select" required>
-                        <option value="S6 CSA">S6 CSA</option>
-                        <option value="S6 CSB">S6 CSB</option>
-                    </select>
+                    <label class="form-label text-muted fw-bold small">Class</label>
+                    <input type="text" name="class_name" class="form-control fw-bold text-secondary bg-light" value="S6 CSA" readonly>
                 </div>
                 <div class="row g-2 mb-3">
                     <div class="col-md-6">
                         <label class="form-label text-muted fw-bold small">Period</label>
-                        <input type="number" name="period" class="form-control" placeholder="e.g. 1" required>
+                        <input type="number" name="period" class="form-control" placeholder="1-7" min="1" max="7" required>
                     </div>
                     <div class="col-md-6">
                         <label class="form-label text-muted fw-bold small">Date</label>
-                        <input type="date" name="date" class="form-control" required>
+                        <input type="date" name="date" id="scanDate" class="form-control" min="2000-01-01" required>
                     </div>
                 </div>
                 <button type="submit" class="btn btn-primary w-100 fw-bold py-2">Start Camera Scan</button>
@@ -77,11 +74,8 @@
             <form method="POST" action="/subject_teacher">
                 <input type="hidden" name="action" value="get_report">
                 <div class="mb-4">
-                    <label class="form-label text-muted fw-bold small">Select Class</label>
-                    <select name="class_name" class="form-select" required>
-                        <option value="S6 CSA">S6 CSA</option>
-                        <option value="S6 CSB">S6 CSB</option>
-                    </select>
+                    <label class="form-label text-muted fw-bold small">Class</label>
+                    <input type="text" name="class_name" class="form-control fw-bold text-secondary bg-light" value="S6 CSA" readonly>
                 </div>
                 <button type="submit" class="btn btn-success w-100 fw-bold py-2 mt-auto">Fetch Records</button>
             </form>
@@ -108,7 +102,7 @@
                 <div class="row g-3">
                     <div class="col-md-6">
                         <label class="form-label text-muted small fw-bold mb-1">Specific Date</label>
-                        <input type="date" id="filterDate" class="form-control" onchange="filterTableAndUpdateChart()">
+                        <input type="date" id="filterDate" class="form-control" min="2000-01-01" onchange="filterTableAndUpdateChart()">
                     </div>
                     <div class="col-md-6">
                         <label class="form-label text-muted small fw-bold mb-1">Search UID</label>
@@ -173,6 +167,16 @@
     let myChart = null;
 
     document.addEventListener("DOMContentLoaded", function() {
+        // --- Calculate today's date and set max limit on date pickers ---
+        let today = new Date().toISOString().split('T')[0];
+        
+        let scanDateInput = document.getElementById("scanDate");
+        if(scanDateInput) scanDateInput.setAttribute("max", today);
+        
+        let filterDateInput = document.getElementById("filterDate");
+        if(filterDateInput) filterDateInput.setAttribute("max", today);
+        // ---------------------------------------------------------------------
+
         if(document.getElementById("logTable")) {
             updateChart(); 
         }
@@ -198,7 +202,6 @@
         badge.innerText = newStatus;
         badge.setAttribute("data-raw-status", newStatus);
         
-        // Changed JS to check against ALL CAPS versions
         badge.className = "badge status-badge px-3 py-2 w-75 text-center text-uppercase"; 
         if (newStatus === "PRESENT") badge.classList.add("bg-success");
         else if (newStatus === "ABSENT") badge.classList.add("bg-danger");
@@ -226,7 +229,10 @@
         let dateVal = document.getElementById("filterDate").value;
         let uidVal = document.getElementById("filterUID").value.toUpperCase();
 
-        let rows = document.getElementById("logTable").getElementsByTagName("tbody")[0].getElementsByTagName("tr");
+        let tbody = document.getElementById("logTable").getElementsByTagName("tbody")[0];
+        let rows = tbody.getElementsByClassName("record-row");
+        let visibleCount = 0;
+
         for (let i = 0; i < rows.length; i++) {
             let rowDate = rows[i].querySelector(".log-date").innerText.trim();
             let rowUID = rows[i].querySelector(".log-uid").innerText.trim().toUpperCase();
@@ -236,13 +242,31 @@
             if (uidVal && !rowUID.includes(uidVal)) showRow = false;
 
             rows[i].style.display = showRow ? "" : "none";
+            if (showRow) visibleCount++;
+        }
+        
+        // Handle "No Data" message smoothly
+        let noDataRow = document.getElementById("noDataRowSubject");
+        
+        if (visibleCount === 0) {
+            if (!noDataRow) {
+                let tr = document.createElement("tr");
+                tr.id = "noDataRowSubject";
+                tr.innerHTML = `<td colspan="5" class="text-center text-muted fw-bold py-4">No records found. Are you sure the selected date is accurate?</td>`;
+                tbody.appendChild(tr);
+            } else {
+                noDataRow.style.display = "";
+            }
+        } else {
+            if (noDataRow) noDataRow.style.display = "none";
         }
         
         updateChart(); 
     }
 
     function updateChart() {
-        let rows = document.getElementById("logTable").getElementsByTagName("tbody")[0].getElementsByTagName("tr");
+        // Only target record rows so we don't accidentally count the "No records found" row!
+        let rows = document.getElementById("logTable").getElementsByTagName("tbody")[0].getElementsByClassName("record-row");
         let presentCount = 0;
         let totalCount = 0;
 
@@ -264,7 +288,7 @@
 
         let percentText = document.getElementById("chartPercentText");
         percentText.innerHTML = `<span class="${colorClass}">${percent}%</span>`;
-        if (totalCount === 0) percentText.innerHTML = `<span class="text-muted fs-6">No data</span>`;
+        if (totalCount === 0) percentText.innerHTML = `<span class="text-muted fs-6">No records match filter</span>`;
 
         if(myChart) { myChart.destroy(); }
 

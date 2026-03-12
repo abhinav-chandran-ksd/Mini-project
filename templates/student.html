@@ -25,7 +25,7 @@
             <div class="col-md-12"><strong class="text-secondary">🔍 Filter Your Records:</strong></div>
             <div class="col-md-6">
                 <label class="form-label text-muted small fw-bold mb-1">Specific Date</label>
-                <input type="date" id="filterDate" class="form-control" onchange="filterLogTable()">
+                <input type="date" id="filterDate" class="form-control" min="2000-01-01" onchange="filterLogTable()">
             </div>
             <div class="col-md-6">
                 <label class="form-label text-muted small fw-bold mb-1">Select Subject</label>
@@ -104,6 +104,13 @@
 
     document.addEventListener("DOMContentLoaded", function() {
         populateSubjectDropdown();
+
+        // --- NEW: Calculate today's date and set max limit on date pickers ---
+        let today = new Date().toISOString().split('T')[0];
+        
+        let filterDateInput = document.getElementById("filterDate");
+        if(filterDateInput) filterDateInput.setAttribute("max", today);
+        // ---------------------------------------------------------------------
     });
 
     // --- VIEW SWITCHER ---
@@ -129,7 +136,7 @@
     function populateSubjectDropdown() {
         let table = document.getElementById("studentTable");
         if (!table) return;
-        let rows = table.getElementsByTagName("tbody")[0].getElementsByTagName("tr");
+        let rows = table.getElementsByTagName("tbody")[0].getElementsByClassName("record-row");
         let subjects = new Set();
         
         for (let i = 0; i < rows.length; i++) {
@@ -148,10 +155,11 @@
         let dateVal = document.getElementById("filterDate").value;
         let subVal = document.getElementById("filterSubject").value.toUpperCase();
 
-        let rows = document.getElementById("studentTable").getElementsByTagName("tbody")[0].getElementsByTagName("tr");
-        for (let i = 0; i < rows.length; i++) {
-            if (!rows[i].querySelector(".log-date")) continue;
+        let tbody = document.getElementById("studentTable").getElementsByTagName("tbody")[0];
+        let rows = tbody.getElementsByClassName("record-row");
+        let visibleCount = 0;
 
+        for (let i = 0; i < rows.length; i++) {
             let rowDate = rows[i].querySelector(".log-date").innerText.trim();
             let rowSub = rows[i].querySelector(".log-subject").innerText.trim().toUpperCase();
 
@@ -160,6 +168,23 @@
             if (subVal && rowSub !== subVal) showRow = false;
 
             rows[i].style.display = showRow ? "" : "none";
+            if (showRow) visibleCount++;
+        }
+
+        // Handle "No Data" message smoothly
+        let noDataRow = document.getElementById("noDataRowStudent");
+        
+        if (visibleCount === 0) {
+            if (!noDataRow) {
+                let tr = document.createElement("tr");
+                tr.id = "noDataRowStudent";
+                tr.innerHTML = `<td colspan="4" class="text-center text-muted fw-bold py-4">No records found. Are you sure the selected date is accurate?</td>`;
+                tbody.appendChild(tr);
+            } else {
+                noDataRow.style.display = "";
+            }
+        } else {
+            if (noDataRow) noDataRow.style.display = "none";
         }
     }
 
@@ -167,7 +192,7 @@
     function generateAnalysisAndCharts() {
         let table = document.getElementById("studentTable");
         if(!table) return;
-        let rows = table.getElementsByTagName("tbody")[0].getElementsByTagName("tr");
+        let rows = table.getElementsByTagName("tbody")[0].getElementsByClassName("record-row");
         
         let subjectStats = {}; 
 
@@ -235,7 +260,8 @@
         }
 
         if (Object.keys(subjectStats).length === 0) {
-            chartsContainer.innerHTML = `<div class="text-center text-muted">No data found.</div>`;
+            chartsContainer.innerHTML = `<div class="text-center text-muted fw-bold col-12 py-3">No records found. Are you sure the selected date is accurate?</div>`;
+            tbodyHTML = `<tr><td colspan="5" class="text-center text-muted fw-bold py-4">No records found. Are you sure the selected date is accurate?</td></tr>`;
         }
 
         document.getElementById("analysisBody").innerHTML = tbodyHTML;

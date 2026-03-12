@@ -1,23 +1,19 @@
-import cv2 
-import face_recognition 
-import pyodbc 
-import json 
-import numpy as np 
-import time 
-import threading # Added for multi-threading
+import cv2
+import face_recognition
+import pyodbc
+import json
+import numpy as np
+import time
+from multiprocessing import Process, Queue, Event
 
 SERVER_NAME = 'localhost'
 DB_NAME = 'attendance_ai'
 
-TOLERANCE = 0.45
-SNAPSHOT_INTERVAL = 2
+# --- DEMO TUNING PARAMETERS ---
+TOLERANCE = 0.48
+SNAPSHOT_INTERVAL = 10
 TOTAL_SNAPSHOTS = 6
 PRESENT_THRESHOLD = 4
-
-# --- GLOBAL VARIABLES FOR THREAD SHARING ---
-latest_frame = None
-latest_detections = []
-running = True
 
 def get_db_connection():
     return pyodbc.connect(
@@ -80,71 +76,60 @@ def get_students_by_class(target_class):
             known_names.append(row[1])
             known_encodings.append(np.array(json.loads(row[2])))
         conn.close()
-    except:
-        pass
+    except Exception as e:
+        print(f"Error loading students: {e}")
     return known_uids, known_names, known_encodings
 
-# --- MODULE 1: AI Processing Thread ---
-def process_faces_worker(all_uids, all_encodings, uid_to_name, attendance_sheet, start_time):
-    global latest_frame, latest_detections, running
+# =====================================================================
+# MODULE 1: INDEPENDENT AI PROCESS (Runs on a separate CPU core)
+# =====================================================================
+def ai_worker_process(input_queue, output_queue, stop_event, all_uids, all_encodings, uid_to_name, start_time):
+    # This loop runs completely isolated from the camera
+    while not stop_event.is_set():
+        if not input_queue.empty():
+            # Get the latest frame from the mailbox
+            frame_data = input_queue.get()
+            frame_to_process = frame_data['frame']
+            snapshot_idx = frame_data['snapshot_idx']
 
-    while running:
-        # Grab a copy of the latest frame safely
-        if latest_frame is None:
-            time.sleep(0.05)
-            continue
-        
-        frame_to_process = latest_frame.copy()
+            rgb_frame = cv2.cvtColor(frame_to_process, cv2.COLOR_BGR2RGB)
+            face_locations = face_recognition.face_locations(rgb_frame, number_of_times_to_upsample=2)
+            face_encodings_frame = face_recognition.face_encodings(rgb_frame, face_locations)
 
-        # Determine which snapshot window we are currently in
-        elapsed = time.time() - start_time
-        snapshot_idx = int(elapsed // SNAPSHOT_INTERVAL)
+            current_detections = []
+            present_uids_this_frame = []
 
-        if snapshot_idx >= TOTAL_SNAPSHOTS:
-            break
+            for (top, right, bottom, left), face_enc in zip(face_locations, face_encodings_frame):
+                name_to_display = "Unknown"
+                box_color = (0, 0, 255)
+                matched_uid = None
 
-        # Heavy AI Computation
-        rgb_frame = cv2.cvtColor(frame_to_process, cv2.COLOR_BGR2RGB)
-        face_locations = face_recognition.face_locations(rgb_frame)
-        face_encodings_frame = face_recognition.face_encodings(rgb_frame, face_locations)
+                if all_encodings:
+                    distances = face_recognition.face_distance(all_encodings, face_enc)
+                    best_idx = int(np.argmin(distances))
 
-        current_detections = []
+                    if distances[best_idx] <= TOLERANCE:
+                        matched_uid = all_uids[best_idx]
+                        name_to_display = uid_to_name[matched_uid]
+                        box_color = (0, 255, 0)
+                        present_uids_this_frame.append(matched_uid)
 
-        for (top, right, bottom, left), face_enc in zip(face_locations, face_encodings_frame):
-            name_to_display = "Unknown"
-            box_color = (0, 0, 255)
+                current_detections.append((left, top, right, bottom, name_to_display, box_color))
 
-            if all_encodings:
-                distances = face_recognition.face_distance(all_encodings, face_enc)
-                best_idx = int(np.argmin(distances))
+            # Put the results in the outgoing mailbox for the camera to draw
+            if output_queue.empty():
+                output_queue.put({
+                    'detections': current_detections,
+                    'present_uids': present_uids_this_frame,
+                    'snapshot_idx': snapshot_idx
+                })
+        else:
+            time.sleep(0.01) # Rest the CPU if mailbox is empty
 
-                if distances[best_idx] <= TOLERANCE:
-                    matched_uid = all_uids[best_idx]
-                    name_to_display = uid_to_name[matched_uid]
-                    box_color = (0, 255, 0)
-
-                    # Mark them present for this specific snapshot window
-                    if snapshot_idx < TOTAL_SNAPSHOTS:
-                        attendance_sheet[matched_uid][snapshot_idx] = True
-
-            # Save coordinates for the camera thread to draw
-            current_detections.append((left, top, right, bottom, name_to_display, box_color))
-
-        # Push the newest detections to the global variable
-        latest_detections = current_detections
-
-        # Tiny sleep to prevent locking up the CPU completely
-        time.sleep(0.01)
-
-# --- MODULE 2: Camera & Display (Main Thread) ---
+# =====================================================================
+# MODULE 2: CAMERA & UI PROCESS (Main Loop)
+# =====================================================================
 def run_class_session(class_name, subject, period, date_input):
-    global running, latest_frame, latest_detections
-    
-    # Reset globals for a new session
-    running = True
-    latest_frame = None
-    latest_detections = []
-
     all_uids, all_names, all_encodings = get_students_by_class(class_name)
     if not all_uids:
         print("No students found for this class.")
@@ -153,65 +138,76 @@ def run_class_session(class_name, subject, period, date_input):
     attendance_sheet = {uid: [False] * TOTAL_SNAPSHOTS for uid in all_uids}
     uid_to_name = dict(zip(all_uids, all_names))
 
-    # Start the camera
-    cam = cv2.VideoCapture(0)
+    # Create the Mailboxes (Queues) and the Stop Signal
+    input_queue = Queue(maxsize=1)
+    output_queue = Queue(maxsize=1)
+    stop_event = Event()
+
     start_time = time.time()
 
-    # Launch the AI in a background thread
-    ai_thread = threading.Thread(
-        target=process_faces_worker, 
-        args=(all_uids, all_encodings, uid_to_name, attendance_sheet, start_time)
+    # Launch the AI module as an independent process
+    ai_process = Process(
+        target=ai_worker_process,
+        args=(input_queue, output_queue, stop_event, all_uids, all_encodings, uid_to_name, start_time)
     )
-    ai_thread.start()
+    ai_process.start()
 
-    while running:
+    cam = cv2.VideoCapture(0)
+    cam.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+    cam.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+
+    latest_detections = []
+    
+    while True:
         ret, frame = cam.read()
         if not ret:
             break
 
-        # Send frame to the AI thread
-        latest_frame = frame.copy()
-
-        # Draw the most recent AI results
-        for (left, top, right, bottom, name_to_display, box_color) in latest_detections:
-            cv2.rectangle(frame, (left, top), (right, bottom), box_color, 2)
-            cv2.putText(
-                frame, name_to_display,
-                (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, box_color, 2
-            )
-
-        # Calculate time
         elapsed = time.time() - start_time
         snapshot_idx = int(elapsed // SNAPSHOT_INTERVAL)
         time_left = SNAPSHOT_INTERVAL - (elapsed % SNAPSHOT_INTERVAL)
 
         if snapshot_idx >= TOTAL_SNAPSHOTS:
-            running = False
             break
+
+        # Send a copy of the frame to the AI ONLY if it has finished the last one
+        if input_queue.empty():
+            input_queue.put({'frame': frame.copy(), 'snapshot_idx': snapshot_idx})
+
+        # Check if the AI has sent back any new bounding boxes
+        if not output_queue.empty():
+            ai_results = output_queue.get()
+            latest_detections = ai_results['detections']
+            
+            # Mark attendance based on AI results
+            for uid in ai_results['present_uids']:
+                if ai_results['snapshot_idx'] < TOTAL_SNAPSHOTS:
+                    attendance_sheet[uid][ai_results['snapshot_idx']] = True
+
+        # Draw the latest known bounding boxes instantly (no lag)
+        for (left, top, right, bottom, name_to_display, box_color) in latest_detections:
+            cv2.rectangle(frame, (left, top), (right, bottom), box_color, 3)
+            cv2.rectangle(frame, (left, top - 35), (right, top), box_color, cv2.FILLED)
+            cv2.putText(frame, name_to_display, (left + 6, top - 6), cv2.FONT_HERSHEY_DUPLEX, 0.7, (255, 255, 255), 1)
 
         # UI Text
-        label = (
-            f"Scanning {class_name} | "
-            f"Photo {snapshot_idx + 1}/{TOTAL_SNAPSHOTS} | "
-            f"Next in {int(time_left)}s"
-        )
-        cv2.putText(
-            frame, label,
-            (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2
-        )
+        label = f"Scanning: {class_name} | Photo {snapshot_idx + 1}/{TOTAL_SNAPSHOTS} | Next scan in {int(time_left)}s"
+        cv2.rectangle(frame, (10, 10), (700, 60), (0, 0, 0), cv2.FILLED)
+        cv2.putText(frame, label, (20, 45), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
 
-        cv2.imshow("Teacher Desk Scanner", frame)
+        cv2.imshow("Teacher Desk Scanner - LIVE DEMO", frame)
         if cv2.waitKey(1) & 0xFF == ord('q'):
-            running = False
             break
 
-    # Cleanup
+    # Cleanup properly
+    stop_event.set()
     cam.release()
     cv2.destroyAllWindows()
-    ai_thread.join() # Wait for the background AI to safely finish
+    ai_process.join()
 
-    # Evaluate and log every student
+    print("\n--- ATTENDANCE RESULTS ---")
     for uid in all_uids:
         status = determine_status(attendance_sheet[uid])
         log_to_db(uid, uid_to_name[uid], class_name, subject, period, date_input, status)
         print(f"{uid_to_name[uid]}: {attendance_sheet[uid]} → {status}")
+    print("--------------------------\n")

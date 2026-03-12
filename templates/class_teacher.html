@@ -70,7 +70,7 @@
             <div class="col-md-12"><strong class="text-secondary">🔍 Filter Logs:</strong></div>
             <div class="col-md-4">
                 <label class="form-label text-muted small fw-bold mb-1">Specific Date</label>
-                <input type="date" id="filterDate" class="form-control" onchange="filterLogTable()">
+                <input type="date" id="filterDate" class="form-control" min="2000-01-01" onchange="filterLogTable()">
             </div>
             <div class="col-md-4">
                 <label class="form-label text-muted small fw-bold mb-1">Search UID</label>
@@ -95,7 +95,7 @@
                         <th>Status</th>
                     </tr>
                 </thead>
-                <tbody>
+                <tbody id="masterTableBody">
                     {% for log in logs %}
                     {% set status_lower = log[5]|lower %}
                     <tr class="record-row">
@@ -146,11 +146,11 @@
             <div class="col-md-12"><strong class="text-primary">⚙️ Analysis Parameters:</strong></div>
             <div class="col-md-3">
                 <label class="form-label text-muted small fw-bold mb-1">Start Date</label>
-                <input type="date" id="anaStartDate" class="form-control" onchange="generateAnalysisAndCharts()">
+                <input type="date" id="anaStartDate" class="form-control" min="2000-01-01" onchange="generateAnalysisAndCharts()">
             </div>
             <div class="col-md-3">
                 <label class="form-label text-muted small fw-bold mb-1">End Date</label>
-                <input type="date" id="anaEndDate" class="form-control" onchange="generateAnalysisAndCharts()">
+                <input type="date" id="anaEndDate" class="form-control" min="2000-01-01" onchange="generateAnalysisAndCharts()">
             </div>
             <div class="col-md-3">
                 <label class="form-label text-muted small fw-bold mb-1">Filter by UID</label>
@@ -194,6 +194,18 @@
 
     document.addEventListener("DOMContentLoaded", function() {
         populateSubjectDropdowns();
+
+        // Calculate today's date and set max limit on all date pickers
+        let today = new Date().toISOString().split('T')[0];
+        
+        let filterDateInput = document.getElementById("filterDate");
+        if(filterDateInput) filterDateInput.setAttribute("max", today);
+
+        let anaStartDateInput = document.getElementById("anaStartDate");
+        if(anaStartDateInput) anaStartDateInput.setAttribute("max", today);
+
+        let anaEndDateInput = document.getElementById("anaEndDate");
+        if(anaEndDateInput) anaEndDateInput.setAttribute("max", today);
     });
 
     function switchView(viewName) {
@@ -264,7 +276,7 @@
     function populateSubjectDropdowns() {
         let table = document.getElementById("masterTable");
         if (!table) return;
-        let rows = table.getElementsByTagName("tbody")[0].getElementsByTagName("tr");
+        let rows = table.getElementsByTagName("tbody")[0].getElementsByClassName("record-row");
         let subjects = new Set();
         for (let i = 0; i < rows.length; i++) {
             subjects.add(rows[i].querySelector(".log-subject").innerText.trim());
@@ -282,7 +294,9 @@
         let uidVal = document.getElementById("filterUID").value.toUpperCase();
         let subVal = document.getElementById("filterSubject").value.toUpperCase();
 
-        let rows = document.getElementById("masterTable").getElementsByTagName("tbody")[0].getElementsByTagName("tr");
+        let rows = document.getElementById("masterTableBody").getElementsByClassName("record-row");
+        let visibleCount = 0;
+
         for (let i = 0; i < rows.length; i++) {
             let rowDate = rows[i].querySelector(".log-date").innerText.trim();
             let rowUID = rows[i].querySelector(".log-uid").innerText.trim().toUpperCase();
@@ -294,6 +308,25 @@
             if (subVal && rowSub !== subVal) showRow = false;
 
             rows[i].style.display = showRow ? "" : "none";
+            if (showRow) visibleCount++;
+        }
+
+        // Handle "No Data" message smoothly
+        let tbody = document.getElementById("masterTableBody");
+        let noDataRow = document.getElementById("noDataRowLog");
+        
+        if (visibleCount === 0) {
+            if (!noDataRow) {
+                let tr = document.createElement("tr");
+                tr.id = "noDataRowLog";
+                // Updated Message Here
+                tr.innerHTML = `<td colspan="5" class="text-center text-muted fw-bold py-4">No records found. Are you sure the selected date is accurate?</td>`;
+                tbody.appendChild(tr);
+            } else {
+                noDataRow.style.display = "";
+            }
+        } else {
+            if (noDataRow) noDataRow.style.display = "none";
         }
     }
 
@@ -303,9 +336,9 @@
         let filterUID = document.getElementById("anaUID").value.toUpperCase();
         let filterSub = document.getElementById("anaSubject").value.toUpperCase();
 
-        let table = document.getElementById("masterTable");
+        let table = document.getElementById("masterTableBody");
         if(!table) return;
-        let rows = table.getElementsByTagName("tbody")[0].getElementsByTagName("tr");
+        let rows = table.getElementsByClassName("record-row");
         
         let studentStats = {}; let subjectStats = {}; 
 
@@ -339,6 +372,11 @@
         let chartsContainer = document.getElementById("chartsContainer");
         chartsContainer.innerHTML = ""; 
 
+        if (Object.keys(subjectStats).length === 0) {
+            // Updated Message Here
+            chartsContainer.innerHTML = `<div class="text-center text-muted fw-bold col-12 py-3">No chart data found. Are you sure the selected date is accurate?</div>`;
+        }
+
         for (let sub in subjectStats) {
             let stats = subjectStats[sub];
             let percent = stats.total > 0 ? Math.round((stats.present / stats.total) * 100) : 0;
@@ -369,10 +407,10 @@
             });
         }
 
-        if (Object.keys(subjectStats).length === 0) chartsContainer.innerHTML = `<div class="text-center text-muted">No data found.</div>`;
-
         let tbodyHTML = "";
+        let visibleStudentsCount = 0;
         for (let key in studentStats) {
+            visibleStudentsCount++;
             let s = studentStats[key];
             let percentage = s.total > 0 ? Math.round((s.present / s.total) * 100) : 0;
             let pctBadge = percentage >= 75 ? `<span class="badge bg-success">${percentage}%</span>` : `<span class="badge bg-danger">${percentage}%</span>`;
@@ -387,6 +425,12 @@
                 <td>${pctBadge}</td>
             </tr>`;
         }
+
+        if (visibleStudentsCount === 0) {
+            // Updated Message Here
+            tbodyHTML = `<tr><td colspan="7" class="text-center text-muted fw-bold py-4">No records found. Are you sure the selected date is accurate?</td></tr>`;
+        }
+
         document.getElementById("analysisBody").innerHTML = tbodyHTML;
     }
 </script>
